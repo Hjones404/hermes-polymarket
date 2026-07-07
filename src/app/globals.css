@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #0a0e14;
+  color: #e6ebf5;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #232c3d;
+  border-radius: 4px;
+}
+
+.card {
+  background-color: #121722;
+  border: 1px solid #232c3d;
+  border-radius: 0.75rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.badge-track { background: rgba(61, 220, 151, 0.15); color: #3ddc97; }
+.badge-watch { background: rgba(232, 179, 57, 0.15); color: #e8b339; }
+.badge-ignore { background: rgba(124, 138, 165, 0.15); color: #7c8aa5; }
+.badge-copy { background: rgba(61, 220, 151, 0.15); color: #3ddc97; }
+.badge-watchlist { background: rgba(232, 179, 57, 0.15); color: #e8b339; }
+.badge-skip { background: rgba(232, 93, 93, 0.15); color: #e85d5d; }
+.badge-demo { background: rgba(124, 138, 165, 0.2); color: #9fb0cc; }

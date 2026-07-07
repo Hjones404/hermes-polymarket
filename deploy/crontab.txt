@@ -1,0 +1,24 @@
+# Install with: crontab deploy/crontab.txt
+# View with:    crontab -l
+# Edit with:    crontab -e
+# Logs land in: ~/hermes-polymarket/logs/cron.log
+#
+# Adjust $HOME below if your app isn't cloned to ~/hermes-polymarket.
+
+# Detect new trades + score them — every 15 minutes
+*/15 * * * * $HOME/hermes-polymarket/deploy/run-job.sh monitor:trades
+*/15 * * * * $HOME/hermes-polymarket/deploy/run-job.sh score:trades
+
+# Refresh open paper trade PnL — hourly
+0 * * * * $HOME/hermes-polymarket/deploy/run-job.sh paper:update-pnl
+
+# Review resolved outcomes — hourly, right after the PnL update
+5 * * * * $HOME/hermes-polymarket/deploy/run-job.sh review:outcomes
+
+# Rescan the leaderboard + reprofile wallets — once a day, early morning UTC
+0 6 * * * $HOME/hermes-polymarket/deploy/run-job.sh scan:leaderboard
+15 6 * * * $HOME/hermes-polymarket/deploy/run-job.sh scan:wallets
+
+# Let the bot tune its own rules, then send the end-of-day report — once a day
+0 0 * * * $HOME/hermes-polymarket/deploy/run-job.sh update:rules
+5 0 * * * $HOME/hermes-polymarket/deploy/run-job.sh report:daily
