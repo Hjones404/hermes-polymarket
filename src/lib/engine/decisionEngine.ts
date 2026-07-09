@@ -13,6 +13,14 @@ export interface ScoreTradesSummary {
   errors: string[];
 }
 
+/**
+ * Scores unscored ObservedTrades into DecisionJournal + PaperTrade rows.
+ *
+ * maxPerRun bounds how many trades a single invocation will process, so a
+ * large backlog can't cause one run to take so long that the next cron tick
+ * fires on top of it. Combined with the flock in deploy/run-job.sh, this
+ * keeps runs from overlapping and double-spending the paper bankroll.
+ */
 export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
   const bankroll = await getBankrollSummary();
