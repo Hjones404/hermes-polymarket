@@ -13,7 +13,7 @@ export interface ScoreTradesSummary {
   errors: string[];
 }
 
-export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
+export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
   const bankroll = await getBankrollSummary();
   let availableCash = bankroll.availableCash;
@@ -22,6 +22,7 @@ export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
     where: { decision: { is: null } },
     include: { wallet: true },
     orderBy: { timestamp: "asc" },
+    take: maxPerRun,
   });
 
   const summary: ScoreTradesSummary = { scored: 0, paperCopy: 0, watchlist: 0, skip: 0, bankrollBlocked: 0, errors: [] };
