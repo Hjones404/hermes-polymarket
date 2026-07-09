@@ -2,24 +2,29 @@ import { db } from "../db";
 import { fetchMarketQuote } from "../adapters/polymarketAdapter";
 import { scoreTrade } from "../scoring/tradeScoring";
 import { getActiveRules } from "./ruleEngine";
+import { getBankrollSummary } from "./bankroll";
 
 export interface ScoreTradesSummary {
   scored: number;
   paperCopy: number;
   watchlist: number;
   skip: number;
+  bankrollBlocked: number;
   errors: string[];
 }
 
 export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
+  const bankroll = await getBankrollSummary();
+  let availableCash = bankroll.availableCash;
+
   const unscored = await db.observedTrade.findMany({
     where: { decision: { is: null } },
     include: { wallet: true },
     orderBy: { timestamp: "asc" },
   });
 
-  const summary: ScoreTradesSummary = { scored: 0, paperCopy: 0, watchlist: 0, skip: 0, errors: [] };
+  const summary: ScoreTradesSummary = { scored: 0, paperCopy: 0, watchlist: 0, skip: 0, bankrollBlocked: 0, errors: [] };
 
   for (const ot of unscored) {
     const quoteResult = await fetchMarketQuote(ot.marketId);
@@ -50,16 +55,35 @@ export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
       rules,
     });
 
+    // Bankroll gate: a paper_copy decision only actually opens a position if
+    // there's simulated cash left to stake. Otherwise it's downgraded to
+    // skip and logged as such — this is what makes "would $X have survived
+    // this" a real test instead of an unconstrained simulation.
+    let finalDecision = scored.decision;
+    let finalSize = scored.simulatedPositionSize;
+    const reasons = [...scored.reasons];
+    const risks = [...scored.risks];
+    let bankrollBlocked = false;
+
+    if (finalDecision === "paper_copy" && finalSize) {
+      if (finalSize > availableCash) {
+        bankrollBlocked = true;
+        finalDecision = "skip";
+        risks.push(`Insufficient paper bankroll: needed $${finalSize.toFixed(2)}, only $${availableCash.toFixed(2)} available.`);
+        finalSize = null;
+      }
+    }
+
     const journal = await db.decisionJournal.create({
       data: {
         observedTradeId: ot.id,
         walletAddress: ot.walletAddress,
         marketId: ot.marketId,
-        decision: scored.decision,
+        decision: finalDecision,
         copyScore: scored.copyScore,
         confidence: scored.confidence,
-        reasonsJson: JSON.stringify(scored.reasons),
-        risksJson: JSON.stringify(scored.risks),
+        reasonsJson: JSON.stringify(reasons),
+        risksJson: JSON.stringify(risks),
         walletQualityScore: scored.breakdown.walletQualityScore,
         roiScore: scored.breakdown.roiScore,
         consistencyScore: scored.breakdown.consistencyScore,
@@ -69,11 +93,11 @@ export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
         spreadScore: scored.breakdown.spreadScore,
         liquidityScore: scored.breakdown.liquidityScore,
         thesisScore: scored.breakdown.thesisScore,
-        simulatedPositionSize: scored.simulatedPositionSize,
+        simulatedPositionSize: finalSize,
       },
     });
 
-    if (scored.decision === "paper_copy" && scored.simulatedPositionSize) {
+    if (finalDecision === "paper_copy" && finalSize) {
       const currentPrice = ot.outcome === "YES" ? quoteResult.data.yesPrice : quoteResult.data.noPrice;
       await db.paperTrade.create({
         data: {
@@ -84,16 +108,18 @@ export async function scoreUnscoredTrades(): Promise<ScoreTradesSummary> {
           side: ot.side,
           entryPrice: currentPrice,
           currentPrice,
-          simulatedPositionSize: scored.simulatedPositionSize,
+          simulatedPositionSize: finalSize,
           unrealizedPnl: 0,
           status: "open",
         },
       });
+      availableCash -= finalSize;
       summary.paperCopy++;
-    } else if (scored.decision === "watchlist") {
+    } else if (finalDecision === "watchlist") {
       summary.watchlist++;
     } else {
       summary.skip++;
+      if (bankrollBlocked) summary.bankrollBlocked++;
     }
     summary.scored++;
   }

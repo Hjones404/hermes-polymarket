@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getBankrollSummary } from "@/lib/engine/bankroll";
 
 export async function GET() {
   const [openPositions, trackedWallets, latestReport, latestRuleChanges, resolvedTrades] = await Promise.all([
@@ -11,7 +10,6 @@ export async function GET() {
     db.paperTrade.findMany({ where: { status: "resolved" }, orderBy: { resolvedAt: "asc" } }),
   ]);
 
-  const bankroll = await getBankrollSummary();
   const totalPaperPnl = resolvedTrades.reduce((a: number, t: any) => a + (t.realizedPnl ?? 0), 0);
   const wins = resolvedTrades.filter((t: any) => (t.realizedPnl ?? 0) > 0).length;
   const winRate = resolvedTrades.length > 0 ? wins / resolvedTrades.length : 0;
@@ -30,10 +28,6 @@ export async function GET() {
   });
 
   return NextResponse.json({
-    startingBalance: bankroll.startingBalance,
-    currentEquity: bankroll.currentEquity,
-    availableCash: bankroll.availableCash,
-    roiPct: bankroll.roiPct,
     totalPaperPnl,
     winRate,
     openPositions,
@@ -46,3 +40,5 @@ export async function GET() {
     pnlSeries,
   });
 }
+
+export const dynamic = "force-dynamic";

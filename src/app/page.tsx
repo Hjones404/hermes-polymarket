@@ -11,6 +11,10 @@ interface OverviewData {
   endOfDayReportStatus: { date: string; sentToTelegram: boolean; summary: string } | null;
   latestRuleChanges: { reason: string; createdAt: string }[];
   pnlSeries: { t: string; pnl: number }[];
+  startingBalance: number;
+  currentEquity: number;
+  availableCash: number;
+  roiPct: number;
 }
 
 function Kpi({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
@@ -77,6 +81,9 @@ export default function OverviewPage() {
           label="End-of-Day Report"
           value={data.endOfDayReportStatus ? (data.endOfDayReportStatus.sentToTelegram ? "Sent" : "Generated") : "Pending"}
         />
+        <Kpi label="Current Equity" value={`$${data.currentEquity.toFixed(2)}`} positive={data.currentEquity >= data.startingBalance} />
+        <Kpi label="ROI" value={`${data.roiPct >= 0 ? "+" : ""}${data.roiPct.toFixed(1)}%`} positive={data.roiPct >= 0} />
+        <Kpi label="Available Cash" value={`$${data.availableCash.toFixed(2)}`} positive={data.availableCash >= 0} />
       </div>
 
       <div className="card p-4">
