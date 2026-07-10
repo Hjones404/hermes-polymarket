@@ -1,39 +1,17 @@
 // Polymarket adapter layer.
 //
-// IMPORTANT — read before relying on this in production:
-// This project was built in a sandboxed environment with no network egress
-// to polymarket.com, so the exact endpoint paths and response shapes below
-// could not be verified against the live API while building this repo.
-// Polymarket's public API surface (gamma-api / data-api / clob) has changed
-// shape before and may again. Treat the URLs and field mappings here as a
-// best-effort starting point, and confirm them against
-// https://docs.polymarket.com before trusting the numbers.
-//
-// Behavior contract (do not weaken this):
-//   - DATA_SOURCE_MODE=live (default): call the real endpoint. On success,
-//     return { ok: true, source: "live", data }. On failure, return
-//     { ok: false, source: "live", error: <real error message> }. We do NOT
-//     fall back to demo data here — the build spec says to surface the real
-//     error and stop, not fake live data.
-//   - DATA_SOURCE_MODE=demo: skip the network call entirely and return
-//     demo data tagged source: "demo".
-//
-// No wallet keys, signing, or order placement exist anywhere in this file
-// or this project. Everything here is read-only market/leaderboard data.
-
-// Polymarket adapter layer.
-//
-// Endpoints verified against https://docs.polymarket.com (July 2026) — a step
-// that could NOT be done from the sandboxed container that first assembled
-// this repo (no network egress to polymarket.com there), so this file has
-// since been corrected against the real, documented API shapes:
+// Endpoints verified against https://docs.polymarket.com (July 2026).
 //   - GET https://data-api.polymarket.com/v1/leaderboard  (max 50 per page,
 //     paginated via offset up to 1000 — NOT a single limit=500 call)
 //   - GET https://data-api.polymarket.com/trades           (per-user trade
 //     history — does NOT include category/resolved/won; those are derived
 //     below via a Gamma market lookup keyed on conditionId)
 //   - GET https://gamma-api.polymarket.com/markets?condition_ids=...  (market
-//     metadata, prices, liquidity, close status)
+//     metadata, prices, liquidity, close status). Gamma's default listing
+//     appears to favor currently-active markets, so a conditionId that
+//     comes back empty is retried once with &closed=true before being
+//     treated as a genuine miss — a market that's already resolved by the
+//     time we look it up is a normal, expected case, not an API failure.
 //   - GET https://clob.polymarket.com/book?token_id=...     (order book,
 //     read-only, used only for the optional spread helper — not on the
 //     critical path of scoring)
@@ -71,8 +49,6 @@ async function safeFetchJson(url: string): Promise<{ json?: any; error?: string 
 }
 
 // --- Leaderboard -----------------------------------------------------------
-// /v1/leaderboard caps `limit` at 50 per call and `offset` at 1000, so
-// pulling e.g. 500 wallets means paging through 10 calls of 50.
 export async function fetchLeaderboard(count = 500): Promise<AdapterResult<LeaderboardEntry[]>> {
   if (dataSourceMode() === "demo") {
     return { ok: true, source: "demo", data: demoLeaderboard(count) };
@@ -111,10 +87,6 @@ export async function fetchLeaderboard(count = 500): Promise<AdapterResult<Leade
 }
 
 // --- Market metadata lookup (internal helper) -------------------------------
-// Batches condition IDs into a single Gamma /markets?condition_ids= call so
-// we don't issue one HTTP request per trade. Used to derive category,
-// resolved/won status, and quote data that the Data API's /trades endpoint
-// does not itself provide.
 interface GammaMarketSummary {
   conditionId: string;
   question: string;
@@ -157,21 +129,48 @@ function parseGammaMarket(row: any): GammaMarketSummary {
   };
 }
 
+// Looks up a batch of condition IDs against Gamma. Tries the default
+// (active-market-favoring) query first; for any conditionId that comes back
+// empty, retries once with &closed=true, since a market that's already
+// resolved by the time we check it is a completely normal occurrence, not
+// an error — the previous version of this adapter treated that as a
+// permanent "No market found" failure and left those trades stuck unscored
+// forever, which is the bug this fixes.
 async function fetchGammaMarketsByConditionIds(conditionIds: string[]): Promise<Map<string, GammaMarketSummary>> {
   const map = new Map<string, GammaMarketSummary>();
   const unique = Array.from(new Set(conditionIds)).filter(Boolean);
-  const CHUNK = 25; // keep query strings/URLs reasonably sized
+  const CHUNK = 25;
+
+  async function queryChunk(chunk: string[], extraParams: string): Promise<any[]> {
+    const params = chunk.map((id) => `condition_ids=${encodeURIComponent(id)}`).join("&");
+    const { json } = await safeFetchJson(`${GAMMA_API}/markets?${params}${extraParams}&limit=${chunk.length}`);
+    return Array.isArray(json) ? json : [];
+  }
 
   for (let i = 0; i < unique.length; i += CHUNK) {
     const chunk = unique.slice(i, i + CHUNK);
-    const params = chunk.map((id) => `condition_ids=${encodeURIComponent(id)}`).join("&");
-    const { json, error } = await safeFetchJson(`${GAMMA_API}/markets?${params}&limit=${chunk.length}`);
-    if (error || !Array.isArray(json)) continue; // best-effort enrichment; caller handles missing entries
-    for (const row of json) {
+
+    // First pass: default query (favors active markets).
+    const activeRows = await queryChunk(chunk, "");
+    for (const row of activeRows) {
       try {
         map.set(row.conditionId, parseGammaMarket(row));
       } catch {
-        // skip unparseable row rather than failing the whole batch
+        /* skip unparseable row */
+      }
+    }
+
+    // Second pass: only for IDs still missing, retry explicitly asking for
+    // closed markets.
+    const stillMissing = chunk.filter((id) => !map.has(id));
+    if (stillMissing.length > 0) {
+      const closedRows = await queryChunk(stillMissing, "&closed=true");
+      for (const row of closedRows) {
+        try {
+          map.set(row.conditionId, parseGammaMarket(row));
+        } catch {
+          /* skip unparseable row */
+        }
       }
     }
   }
@@ -209,17 +208,18 @@ export async function fetchWalletTrades(address: string, lookbackDays = 30): Pro
       }
       return {
         walletAddress: address,
-        marketId: t.conditionId, // used as our lookup key against Gamma going forward
+        marketId: t.conditionId,
         conditionId: t.conditionId,
         marketQuestion: market?.question || t.title || "Unknown market",
         marketCategory: market?.category,
         outcome: t.outcome,
         side: (t.side || "BUY").toLowerCase() === "sell" ? "sell" : "buy",
         entryPrice: Number(t.price ?? 0),
-        size: Number(t.size ?? 0) * Number(t.price ?? 0), // Data API `size` is in shares; convert to USD notional
+        size: Number(t.size ?? 0) * Number(t.price ?? 0),
         timestamp: new Date(Number(t.timestamp) * 1000).toISOString(),
         resolved,
         won,
+        txHash: t.transactionHash || undefined,
       };
     });
 
@@ -235,13 +235,29 @@ export async function fetchMarketQuote(marketId: string): Promise<AdapterResult<
     return { ok: true, source: "demo", data: demoMarketQuote(marketId) };
   }
 
-  // `marketId` is a conditionId throughout this app (see fetchWalletTrades).
-  const { json, error } = await safeFetchJson(`${GAMMA_API}/markets?condition_ids=${encodeURIComponent(marketId)}&limit=1`);
-  if (error) {
-    return { ok: false, source: "live", error };
+  // Try active markets first, then retry once against closed markets before
+  // giving up — see fetchGammaMarketsByConditionIds' comment for why.
+  let json: any[] = [];
+  const { json: activeJson, error: activeError } = await safeFetchJson(
+    `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(marketId)}&limit=1`
+  );
+  if (activeError) {
+    return { ok: false, source: "live", error: activeError };
   }
-  if (!Array.isArray(json) || json.length === 0) {
-    return { ok: false, source: "live", error: `No market found for conditionId ${marketId}` };
+  json = Array.isArray(activeJson) ? activeJson : [];
+
+  if (json.length === 0) {
+    const { json: closedJson, error: closedError } = await safeFetchJson(
+      `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(marketId)}&closed=true&limit=1`
+    );
+    if (closedError) {
+      return { ok: false, source: "live", error: closedError };
+    }
+    json = Array.isArray(closedJson) ? closedJson : [];
+  }
+
+  if (json.length === 0) {
+    return { ok: false, source: "live", error: `No market found for conditionId ${marketId} (checked both active and closed)` };
   }
 
   try {
@@ -270,12 +286,9 @@ export async function fetchMarketQuote(marketId: string): Promise<AdapterResult<
   }
 }
 
-// Order book spread lookup — read-only, optional finer-grained spread source
-// (the Gamma market's bestBid/bestAsk used above is usually sufficient).
-// Never used to place orders; there is no order-placement function anywhere
-// in this adapter or project. Requires a CLOB token_id (not a conditionId) —
-// look one up via `clobTokenIds` on the Gamma market response if you wire
-// this in.
+// Order book spread lookup — read-only, optional. Never used to place
+// orders; there is no order-placement function anywhere in this adapter or
+// project.
 export async function fetchOrderBookSpread(tokenId: string): Promise<AdapterResult<{ bid: number; ask: number; spread: number }>> {
   if (dataSourceMode() === "demo") {
     return { ok: true, source: "demo", data: { bid: 0.48, ask: 0.5, spread: 0.02 } };

@@ -10,6 +10,7 @@ export interface ScoreTradesSummary {
   watchlist: number;
   skip: number;
   bankrollBlocked: number;
+  marketDataUnavailable: number;
   errors: string[];
 }
 
@@ -18,13 +19,24 @@ export interface ScoreTradesSummary {
  *
  * maxPerRun bounds how many trades a single invocation will process, so a
  * large backlog can't cause one run to take so long that the next cron tick
- * fires on top of it. Combined with the flock in deploy/run-job.sh, this
- * keeps runs from overlapping and double-spending the paper bankroll.
+ * fires on top of it (see deploy/run-job.sh's flock for the other half of
+ * this protection).
+ *
+ * IMPORTANT: if fetchMarketQuote fails for a trade, we no longer just log
+ * the error and leave it unscored. A market that's already resolved (or
+ * otherwise genuinely not found after the adapter's active+closed retry)
+ * will fail forever — leaving it unscored means every future run re-fetches
+ * it, re-fails, and never makes forward progress, effectively wedging the
+ * whole pipeline behind a small set of permanently-broken lookups. Instead
+ * we write an explicit `skip` decision with the real error preserved as the
+ * risk reason, so the trade is marked processed and the queue keeps moving.
  */
 export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
   const bankroll = await getBankrollSummary();
   let availableCash = bankroll.availableCash;
+  let openStake = bankroll.openStake;
+  const maxExposure = bankroll.maxExposure;
 
   const unscored = await db.observedTrade.findMany({
     where: { decision: { is: null } },
@@ -33,12 +45,48 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
     take: maxPerRun,
   });
 
-  const summary: ScoreTradesSummary = { scored: 0, paperCopy: 0, watchlist: 0, skip: 0, bankrollBlocked: 0, errors: [] };
+  const summary: ScoreTradesSummary = {
+    scored: 0,
+    paperCopy: 0,
+    watchlist: 0,
+    skip: 0,
+    bankrollBlocked: 0,
+    marketDataUnavailable: 0,
+    errors: [],
+  };
 
   for (const ot of unscored) {
     const quoteResult = await fetchMarketQuote(ot.marketId);
     if (!quoteResult.ok) {
       summary.errors.push(`Market ${ot.marketId}: ${quoteResult.error}`);
+
+      // Mark this trade processed as a skip instead of leaving it unscored
+      // forever — see the function-level comment above for why.
+      await db.decisionJournal.create({
+        data: {
+          observedTradeId: ot.id,
+          walletAddress: ot.walletAddress,
+          marketId: ot.marketId,
+          decision: "skip",
+          copyScore: 0,
+          confidence: 0,
+          reasonsJson: JSON.stringify([]),
+          risksJson: JSON.stringify([`Market data unavailable: ${quoteResult.error}`]),
+          walletQualityScore: 0,
+          roiScore: 0,
+          consistencyScore: 0,
+          copyabilityScore: 0,
+          categoryFitScore: 0,
+          entryTimingScore: 0,
+          spreadScore: 0,
+          liquidityScore: 0,
+          thesisScore: 0,
+          simulatedPositionSize: null,
+        },
+      });
+      summary.skip++;
+      summary.marketDataUnavailable++;
+      summary.scored++;
       continue;
     }
 
@@ -64,10 +112,10 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
       rules,
     });
 
-    // Bankroll gate: a paper_copy decision only actually opens a position if
-    // there's simulated cash left to stake. Otherwise it's downgraded to
-    // skip and logged as such — this is what makes "would $X have survived
-    // this" a real test instead of an unconstrained simulation.
+    // Bankroll + exposure gate: a paper_copy decision only actually opens a
+    // position if there's simulated cash left AND doing so wouldn't push
+    // total simultaneous stake above the exposure cap. Otherwise it's
+    // downgraded to skip and logged as such.
     let finalDecision = scored.decision;
     let finalSize = scored.simulatedPositionSize;
     const reasons = [...scored.reasons];
@@ -75,10 +123,18 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
     let bankrollBlocked = false;
 
     if (finalDecision === "paper_copy" && finalSize) {
+      const wouldBeStake = openStake + finalSize;
       if (finalSize > availableCash) {
         bankrollBlocked = true;
         finalDecision = "skip";
         risks.push(`Insufficient paper bankroll: needed $${finalSize.toFixed(2)}, only $${availableCash.toFixed(2)} available.`);
+        finalSize = null;
+      } else if (wouldBeStake > maxExposure) {
+        bankrollBlocked = true;
+        finalDecision = "skip";
+        risks.push(
+          `Exceeds max exposure: opening $${finalSize.toFixed(2)} would bring total staked to $${wouldBeStake.toFixed(2)}, above the ${(bankroll.maxExposurePct * 100).toFixed(0)}% cap ($${maxExposure.toFixed(2)}).`
+        );
         finalSize = null;
       }
     }
@@ -123,6 +179,7 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
         },
       });
       availableCash -= finalSize;
+      openStake += finalSize;
       summary.paperCopy++;
     } else if (finalDecision === "watchlist") {
       summary.watchlist++;

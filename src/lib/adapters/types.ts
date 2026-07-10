@@ -32,6 +32,7 @@ export interface WalletTrade {
   timestamp: string; // ISO
   resolved?: boolean;
   won?: boolean;
+  txHash?: string; // Data API's transactionHash — reliable de-dupe key
 }
 
 export interface MarketQuote {
