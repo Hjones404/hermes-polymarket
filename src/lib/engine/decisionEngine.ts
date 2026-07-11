@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { fetchMarketQuote } from "../adapters/polymarketAdapter";
+import { fetchMarketQuotesBatch } from "../adapters/polymarketAdapter";
 import { scoreTrade } from "../scoring/tradeScoring";
 import { getActiveRules } from "./ruleEngine";
 import { getBankrollSummary } from "./bankroll";
@@ -22,14 +22,16 @@ export interface ScoreTradesSummary {
  * fires on top of it (see deploy/run-job.sh's flock for the other half of
  * this protection).
  *
- * IMPORTANT: if fetchMarketQuote fails for a trade, we no longer just log
- * the error and leave it unscored. A market that's already resolved (or
- * otherwise genuinely not found after the adapter's active+closed retry)
- * will fail forever — leaving it unscored means every future run re-fetches
- * it, re-fails, and never makes forward progress, effectively wedging the
- * whole pipeline behind a small set of permanently-broken lookups. Instead
- * we write an explicit `skip` decision with the real error preserved as the
- * risk reason, so the trade is marked processed and the queue keeps moving.
+ * Market quotes for the whole batch are fetched up front via
+ * fetchMarketQuotesBatch (chunked ~25-at-a-time) instead of one HTTP call
+ * per trade — the previous per-trade version could issue 300-600 rapid
+ * individual requests scoring a single batch, which tripped Polymarket's
+ * rate limit (HTTP 429) and caused most of the batch to fail.
+ *
+ * If a market genuinely can't be found even after the adapter's active+
+ * closed retry, we write an explicit `skip` decision instead of leaving the
+ * trade unscored forever — leaving it unscored means every future run
+ * re-fetches it, re-fails, and never makes forward progress.
  */
 export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
@@ -55,13 +57,19 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
     errors: [],
   };
 
-  for (const ot of unscored) {
-    const quoteResult = await fetchMarketQuote(ot.marketId);
-    if (!quoteResult.ok) {
-      summary.errors.push(`Market ${ot.marketId}: ${quoteResult.error}`);
+  if (unscored.length === 0) return summary;
 
-      // Mark this trade processed as a skip instead of leaving it unscored
-      // forever — see the function-level comment above for why.
+  // One batched round of HTTP calls for every market needed by this whole
+  // run, instead of one call per trade.
+  const quotes = await fetchMarketQuotesBatch(unscored.map((ot) => ot.marketId));
+
+  for (const ot of unscored) {
+    const quoteResult = quotes.get(ot.marketId);
+
+    if (!quoteResult || !quoteResult.ok) {
+      const errorMsg = quoteResult ? quoteResult.error : `No quote returned for ${ot.marketId}`;
+      summary.errors.push(`Market ${ot.marketId}: ${errorMsg}`);
+
       await db.decisionJournal.create({
         data: {
           observedTradeId: ot.id,
@@ -71,7 +79,7 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
           copyScore: 0,
           confidence: 0,
           reasonsJson: JSON.stringify([]),
-          risksJson: JSON.stringify([`Market data unavailable: ${quoteResult.error}`]),
+          risksJson: JSON.stringify([`Market data unavailable: ${errorMsg}`]),
           walletQualityScore: 0,
           roiScore: 0,
           consistencyScore: 0,
