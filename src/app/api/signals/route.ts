@@ -15,6 +15,8 @@ export async function GET() {
       walletLabel: t.wallet.label,
       marketQuestion: t.marketQuestion,
       marketCategory: t.marketCategory,
+      outcome: t.outcome, // e.g. "Yes"/"No", "Up"/"Down", or a team/side name
+      side: t.side, // buy | sell — buying the outcome vs. selling/betting against it
       walletEntryPrice: t.walletEntryPrice,
       detectedPrice: t.detectedPrice,
       timestamp: t.timestamp,
@@ -25,3 +27,5 @@ export async function GET() {
     }))
   );
 }
+
+export const dynamic = "force-dynamic";

@@ -13,6 +13,10 @@ export async function GET() {
       id: d.id,
       walletAddress: d.walletAddress,
       marketQuestion: d.observedTrade.marketQuestion,
+      marketCategory: d.observedTrade.marketCategory,
+      outcome: d.observedTrade.outcome, // e.g. "Yes"/"No", "Up"/"Down", or a team/side name
+      side: d.observedTrade.side, // buy | sell
+      walletEntryPrice: d.observedTrade.walletEntryPrice,
       decision: d.decision,
       copyScore: d.copyScore,
       confidence: d.confidence,
@@ -35,3 +39,5 @@ export async function GET() {
     }))
   );
 }
+
+export const dynamic = "force-dynamic";

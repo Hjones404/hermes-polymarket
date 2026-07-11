@@ -139,6 +139,7 @@ model PaperTrade {
   openedAt              DateTime  @default(now())
   closedAt              DateTime?
   resolvedAt            DateTime?
+  expiresAt             DateTime? // market's expected resolution/end date, captured at open time
 
   decision      DecisionJournal @relation(fields: [decisionJournalId], references: [id])
   pnlSnapshots  PnlSnapshot[]

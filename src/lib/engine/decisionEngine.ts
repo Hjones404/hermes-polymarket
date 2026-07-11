@@ -24,14 +24,11 @@ export interface ScoreTradesSummary {
  *
  * Market quotes for the whole batch are fetched up front via
  * fetchMarketQuotesBatch (chunked ~25-at-a-time) instead of one HTTP call
- * per trade — the previous per-trade version could issue 300-600 rapid
- * individual requests scoring a single batch, which tripped Polymarket's
- * rate limit (HTTP 429) and caused most of the batch to fail.
+ * per trade.
  *
  * If a market genuinely can't be found even after the adapter's active+
  * closed retry, we write an explicit `skip` decision instead of leaving the
- * trade unscored forever — leaving it unscored means every future run
- * re-fetches it, re-fails, and never makes forward progress.
+ * trade unscored forever.
  */
 export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesSummary> {
   const rules = await getActiveRules();
@@ -59,8 +56,6 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
 
   if (unscored.length === 0) return summary;
 
-  // One batched round of HTTP calls for every market needed by this whole
-  // run, instead of one call per trade.
   const quotes = await fetchMarketQuotesBatch(unscored.map((ot) => ot.marketId));
 
   for (const ot of unscored) {
@@ -172,6 +167,10 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
 
     if (finalDecision === "paper_copy" && finalSize) {
       const currentPrice = ot.outcome === "YES" ? quoteResult.data.yesPrice : quoteResult.data.noPrice;
+      const expiresAt =
+        quoteResult.data.secondsToResolution !== undefined
+          ? new Date(Date.now() + quoteResult.data.secondsToResolution * 1000)
+          : null;
       await db.paperTrade.create({
         data: {
           decisionJournalId: journal.id,
@@ -184,6 +183,7 @@ export async function scoreUnscoredTrades(maxPerRun = 300): Promise<ScoreTradesS
           simulatedPositionSize: finalSize,
           unrealizedPnl: 0,
           status: "open",
+          expiresAt,
         },
       });
       availableCash -= finalSize;

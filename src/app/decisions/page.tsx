@@ -2,6 +2,20 @@
 
 import { useEffect, useState } from "react";
 
+function formatPrice(p: number | null | undefined) {
+  if (p === null || p === undefined) return "—";
+  return `${(p * 100).toFixed(1)}¢`;
+}
+
+function DirectionBadge({ outcome, side }: { outcome: string; side: string }) {
+  const label = side === "sell" ? "Selling" : "Buying";
+  return (
+    <span className="badge badge-copy">
+      {label} {outcome}
+    </span>
+  );
+}
+
 export default function DecisionJournalPage() {
   const [decisions, setDecisions] = useState<any[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -27,7 +41,11 @@ export default function DecisionJournalPage() {
             <div className="flex justify-between items-center">
               <div>
                 <div className="text-sm font-medium">{d.marketQuestion}</div>
-                <div className="text-xs text-muted">{new Date(d.createdAt).toLocaleString()}</div>
+                <div className="flex items-center gap-2 mt-2">
+                  <DirectionBadge outcome={d.outcome} side={d.side} />
+                  <span className="text-xs text-muted">entry {formatPrice(d.walletEntryPrice)}</span>
+                </div>
+                <div className="text-xs text-muted mt-1">{new Date(d.createdAt).toLocaleString()}</div>
               </div>
               <div className="flex items-center gap-3">
                 {d.wasDecisionGood !== null && (
