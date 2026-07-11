@@ -8,15 +8,15 @@ export interface MonitorResult {
   error?: string;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Detects new trades for a given wallet. De-duplicates primarily on the
  * trade's txHash (a real, stable identifier from the Data API) when present;
  * falls back to the old walletAddress+marketId+timestamp match only for
- * demo data or trades that somehow lack a txHash. The previous version used
- * exact Date equality as its only check, which is fragile — timestamp
- * round-tripping through JS Date / SQLite storage can drift by enough to
- * make the same trade fail to match itself, causing it to be re-inserted
- * as "new" on every single poll and never actually converging.
+ * demo data or trades that somehow lack a txHash.
  */
 export async function monitorWallet(address: string): Promise<MonitorResult> {
   const result = await fetchWalletTrades(address, 2); // only need very recent trades
@@ -61,11 +61,19 @@ export async function monitorWallet(address: string): Promise<MonitorResult> {
   return { ok: true, address, newTrades };
 }
 
-export async function monitorTrackedAndWatchedWallets() {
+/**
+ * Iterates every tracked/watched wallet. A small delay between wallets
+ * spreads out the Gamma API calls each fetchWalletTrades makes internally —
+ * without this, hundreds of wallets processed back-to-back with no pause
+ * can trip Polymarket's rate limit on their own, even with monitor:trades
+ * and score:trades no longer running concurrently (see crontab.txt).
+ */
+export async function monitorTrackedAndWatchedWallets(delayMs = 150) {
   const wallets = await db.walletProfile.findMany({ where: { status: { in: ["track", "watch"] } } });
   const results: MonitorResult[] = [];
   for (const w of wallets) {
     results.push(await monitorWallet(w.address));
+    await sleep(delayMs);
   }
   return results;
 }

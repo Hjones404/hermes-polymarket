@@ -5,9 +5,16 @@
 #
 # Adjust $HOME below if your app isn't cloned to ~/hermes-polymarket.
 
-# Detect new trades + score them — every 15 minutes
-*/15 * * * * $HOME/hermes-polymarket/deploy/run-job.sh monitor:trades
-*/15 * * * * $HOME/hermes-polymarket/deploy/run-job.sh score:trades
+# Detect new trades + score them — every 15 minutes.
+# IMPORTANT: these run as ONE chained job (cycle:quick = monitor:trades &&
+# score:trades), not two separate cron lines. Running them as two separate
+# `*/15 * * * *` entries lets them fire concurrently (they use different
+# flock files), which doubles the simultaneous load on Polymarket's API and
+# was the root cause of persistent HTTP 429 rate-limit errors even after
+# batching the market-quote lookups. Chaining them guarantees monitor:trades
+# fully finishes (and its API calls stop) before score:trades starts, and as
+# a bonus score:trades always sees the freshest data from the same tick.
+*/15 * * * * $HOME/hermes-polymarket/deploy/run-job.sh cycle:quick
 
 # Refresh open paper trade PnL — hourly
 0 * * * * $HOME/hermes-polymarket/deploy/run-job.sh paper:update-pnl

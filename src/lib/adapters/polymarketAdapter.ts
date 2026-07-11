@@ -162,7 +162,7 @@ async function fetchGammaMarketsByConditionIds(conditionIds: string[]): Promise<
   const map = new Map<string, GammaMarketSummary>();
   const unique = Array.from(new Set(conditionIds)).filter(Boolean);
   const CHUNK = 25;
-  const DELAY_BETWEEN_CHUNKS_MS = 300;
+  const DELAY_BETWEEN_CHUNKS_MS = 500;
 
   async function queryChunk(chunk: string[], extraParams: string): Promise<any[]> {
     const params = chunk.map((id) => `condition_ids=${encodeURIComponent(id)}`).join("&");

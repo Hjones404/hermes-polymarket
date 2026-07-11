@@ -11,6 +11,10 @@ export interface ProfileResult {
   error?: string;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Analyzes the last 30 days of a wallet's activity and updates its
  * WalletProfile with fresh scores. Skips (rather than fakes) wallets whose
@@ -52,20 +56,27 @@ export async function profileWallet(address: string): Promise<ProfileResult> {
   return { ok: true, address, status: score.status, globalScore: score.globalScore };
 }
 
-export async function profileAllTrackedOrWatchedWallets() {
+/**
+ * A small delay between wallets spreads out the Gamma API calls each
+ * fetchWalletTrades makes internally — without this, hundreds of wallets
+ * processed back-to-back with no pause can trip Polymarket's rate limit.
+ */
+export async function profileAllTrackedOrWatchedWallets(delayMs = 150) {
   const wallets = await db.walletProfile.findMany({ where: { status: { in: ["track", "watch"] } } });
   const results: ProfileResult[] = [];
   for (const w of wallets) {
     results.push(await profileWallet(w.address));
+    await sleep(delayMs);
   }
   return results;
 }
 
-export async function profileAllWallets() {
+export async function profileAllWallets(delayMs = 150) {
   const wallets = await db.walletProfile.findMany();
   const results: ProfileResult[] = [];
   for (const w of wallets) {
     results.push(await profileWallet(w.address));
+    await sleep(delayMs);
   }
   return results;
 }

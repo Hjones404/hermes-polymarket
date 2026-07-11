@@ -16,6 +16,7 @@
     "scan:wallets": "tsx scripts/scan-wallets.ts",
     "monitor:trades": "tsx scripts/monitor-trades.ts",
     "score:trades": "tsx scripts/score-trades.ts",
+    "cycle:quick": "npm run monitor:trades && npm run score:trades",
     "paper:update-pnl": "tsx scripts/paper-update-pnl.ts",
     "review:outcomes": "tsx scripts/review-outcomes.ts",
     "update:rules": "tsx scripts/update-rules.ts",
