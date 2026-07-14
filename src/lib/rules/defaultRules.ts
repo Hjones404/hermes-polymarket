@@ -19,7 +19,8 @@ export interface Rules {
   maxAllowedPriceMovementSinceEntry: number; // fraction, e.g. 0.08 = 8 cents
   maxAllowedSpreadForCopy: number;
   minLiquidityForCopy: number;
-  minTimeToResolutionSeconds: number; // avoid copying trades about to resolve
+  minTimeToResolutionSeconds: number; // avoid copying trades about to resolve (floor)
+  maxTimeToResolutionSeconds: number; // avoid copying trades that won't resolve for a long time (ceiling)
   minCopyScoreForPaperCopy: number;
   minCopyScoreForWatchlist: number;
 
@@ -55,7 +56,8 @@ export const DEFAULT_RULES: Rules = {
   maxAllowedPriceMovementSinceEntry: 0.08,
   maxAllowedSpreadForCopy: 0.05,
   minLiquidityForCopy: 1000,
-  minTimeToResolutionSeconds: 3600,
+  minTimeToResolutionSeconds: 3600, // don't copy something resolving in under 1 hour
+  maxTimeToResolutionSeconds: 86400, // don't copy something resolving more than 24 hours out
   minCopyScoreForPaperCopy: 0.65,
   minCopyScoreForWatchlist: 0.45,
 

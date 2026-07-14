@@ -73,6 +73,14 @@ export function scoreTrade(input: TradeScoreInput): TradeScoreResult {
     risks.push("Market resolves very soon — limited time for the thesis to play out.");
   }
 
+  if (rules.maxTimeToResolutionSeconds !== undefined && secondsToResolution > rules.maxTimeToResolutionSeconds) {
+    const hoursOut = (secondsToResolution / 3600).toFixed(1);
+    const maxHours = (rules.maxTimeToResolutionSeconds / 3600).toFixed(0);
+    risks.push(`Market doesn't resolve for ~${hoursOut}h — outside the ${maxHours}h max copy window.`);
+  } else {
+    reasons.push("Market resolves within the configured short-horizon copy window.");
+  }
+
   if (walletCategoryScore >= 0.6) {
     reasons.push(`Wallet has a strong track record in ${trade.marketCategory || "this category"}.`);
   } else if (walletCategoryScore < 0.45) {
@@ -96,13 +104,17 @@ export function scoreTrade(input: TradeScoreInput): TradeScoreResult {
 
   const confidence = clamp01(copyScore * 0.7 + walletQualityScore * 0.3);
 
+  const withinResolutionWindow =
+    secondsToResolution >= rules.minTimeToResolutionSeconds &&
+    (rules.maxTimeToResolutionSeconds === undefined || secondsToResolution <= rules.maxTimeToResolutionSeconds);
+
   let decision: Decision = "skip";
   if (
     copyScore >= rules.minCopyScoreForPaperCopy &&
     priceMovement <= rules.maxAllowedPriceMovementSinceEntry &&
     spread <= rules.maxAllowedSpreadForCopy &&
     liquidity >= rules.minLiquidityForCopy &&
-    secondsToResolution >= rules.minTimeToResolutionSeconds
+    withinResolutionWindow
   ) {
     decision = "paper_copy";
   } else if (copyScore >= rules.minCopyScoreForWatchlist) {
