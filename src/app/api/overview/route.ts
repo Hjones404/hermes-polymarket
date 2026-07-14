@@ -46,3 +46,5 @@ export async function GET() {
     pnlSeries,
   });
 }
+
+export const dynamic = "force-dynamic";

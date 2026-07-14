@@ -57,3 +57,5 @@ export async function GET() {
       "Blind-copy and missed-winner figures are simplified estimates for a paper-trading MVP — see README for methodology and limitations.",
   });
 }
+
+export const dynamic = "force-dynamic";

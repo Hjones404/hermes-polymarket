@@ -31,3 +31,5 @@ export async function GET(_req: Request, { params }: { params: { address: string
     })),
   });
 }
+
+export const dynamic = "force-dynamic";
